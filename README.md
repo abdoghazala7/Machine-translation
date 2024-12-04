@@ -69,7 +69,7 @@ pip install -r requirements.txt
 streamlit run translate.py
 ```
 
-This will start the streamlit web page.
+This will start the Streamlit UI.
 
 ## How It Works
 
