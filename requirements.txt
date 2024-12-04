@@ -1,0 +1,11 @@
+## Use python 3.11.9
+
+torch==2.0.1
+torchvision==0.16.0 
+torchtext==0.15.2
+datasets==3.1.0
+tokenizers==0.20.3
+torchmetrics==1.6.0
+tensorboard==2.16.2
+altair==5.5.0
+googletrans==4.0.0-rc1
