@@ -1,6 +1,6 @@
 # Translation Model With Transformer
 
-This project implements a sequence-to-sequence translation model using Transformer architecture. It includes functionalities like beam and greedy search decoding, attention visualization, and efficient training. The project focuses on translating text between English and Arabic using advanced techniques.
+This project implements a sequence-to-sequence translation model using Transformer architecture. It includes functionalities like beam and greedy search decoding, attention visualization, and efficient training. The project focuses on translating text from English to Arabic using advanced techniques.
 
 ## Features
 
@@ -34,7 +34,14 @@ This project implements a sequence-to-sequence translation model using Transform
 
 ### Dependencies
 - **`requirements.txt`**: Specifies required Python libraries and versions.
+- 
 
+## Download the Pre-trained Weights
+
+To download the pre-trained model weights, use the following link:
+
+https://drive.google.com/file/d/1-YSZq_vgRcl5eEMbcmdLpLhhDncBtnz4/view?usp=sharing
+after downloading the file put it in the weights folder
 
 ## How to Run
 
