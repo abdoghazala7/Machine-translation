@@ -1,0 +1,5 @@
+## Download the Pre-trained Weights
+
+To download the pre-trained model weights, use the following link:
+
+https://drive.google.com/drive/u/0/folders/1-H6gEpp_-_ADkFtax6gLLuS4adFmNs2d
