@@ -8,8 +8,6 @@ This project implements a sequence-to-sequence translation model using Transform
 - **Greedy Search Decoding**: Efficient search for optimal translation sequences.
 - **Attention Visualization**: Insights into the model's decision-making process.
 - **Modular Design**: Configurable architecture for training and inference.
-- **Pre-trained Weights**: Ready-to-use weights for quick deployment.
-
 ---
 
 ## Files and Directories
