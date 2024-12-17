@@ -27,10 +27,6 @@ This project implements a sequence-to-sequence translation model using Transform
 - **`Beam_Search.ipynb`**: Demonstrates the beam search decoding process.
 - **`attention_visual.ipynb`**: Visualizes attention weights in the Transformer model.
 
-### Pre-trained Weights and Tokenizers
-- **`weights/Tmodel_70.pt`**: Pre-trained model weights for deployment.
-- **`tokenizer_text_ar.json`**: Arabic tokenizer configuration.
-- **`tokenizer_text_en.json`**: English tokenizer configuration.
 
 ### Dependencies
 - **`requirements.txt`**: Specifies required Python libraries and versions.
@@ -73,7 +69,7 @@ This will start the Streamlit UI.
 
 ## How It Works
 
-1. **Tokenization**: The input text is preprocessed and tokenized using pre-trained tokenizers (tokenizer_text_en.json) and (tokenizer_text_ar.json).
+1. **Tokenization**: The input text is preprocessed using tokenizers.
 2. **Encoding**: The source sequence is passed through the Transformer encoder, generating context-aware embeddings.
 3. **Greedy Search Decoding:**: The decoder uses a greedy search strategy to find the most likely target word.
 4. **Translation**: The tokenized target sequence is converted back into human-readable text.
