@@ -2,21 +2,29 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset
 
+
+def causal_mask(size):
+    # Shape: (size, size)
+    mask = torch.triu(torch.ones(size, size), diagonal=1).type(torch.bool)
+    return mask
+
 class BilingualDataset(Dataset):
 
-    def __init__(self, ds, tokenizer_src, tokenizer_tgt, src_lang, tgt_lang, seq_len):
+    def __init__(self, ds, tokenizer_src, tokenizer_tgt, src_lang, tgt_lang, seq_len_src, seq_len_tgt):
         super().__init__()
-        self.seq_len = seq_len
-
         self.ds = ds
         self.tokenizer_src = tokenizer_src
         self.tokenizer_tgt = tokenizer_tgt
         self.src_lang = src_lang
         self.tgt_lang = tgt_lang
+        self.seq_len_src = seq_len_src
+        self.seq_len_tgt = seq_len_tgt
 
         self.sos_token = torch.tensor([tokenizer_tgt.token_to_id("[SOS]")], dtype=torch.int64)
         self.eos_token = torch.tensor([tokenizer_tgt.token_to_id("[EOS]")], dtype=torch.int64)
-        self.pad_token = torch.tensor([tokenizer_tgt.token_to_id("[PAD]")], dtype=torch.int64)
+        
+        self.pad_token_src = torch.tensor([tokenizer_src.token_to_id("[PAD]")], dtype=torch.int64)
+        self.pad_token_tgt = torch.tensor([tokenizer_tgt.token_to_id("[PAD]")], dtype=torch.int64)
 
     def __len__(self):
         return len(self.ds)
@@ -26,69 +34,92 @@ class BilingualDataset(Dataset):
         src_text = src_target_pair[self.src_lang]
         tgt_text = src_target_pair[self.tgt_lang]
 
-        # If either sentence is None, return None to indicate invalid data
         if src_text is None or tgt_text is None:
-           return None  # Return None to indicate this example should be skipped
+            return None  # Handled by custom_collate_fn
 
-        # Transform the text into tokens
         enc_input_tokens = self.tokenizer_src.encode(src_text).ids
         dec_input_tokens = self.tokenizer_tgt.encode(tgt_text).ids
 
-        # Add sos, eos and padding to each sentence
-        enc_num_padding_tokens = self.seq_len - len(enc_input_tokens) - 2  # We will add <s> and </s>
-        # We will only add <s>, and </s> only on the label
-        dec_num_padding_tokens = self.seq_len - len(dec_input_tokens) - 1
+        # --- FIX 1: Handle Truncation and Padding ---
 
-        # Make sure the number of padding tokens is not negative. If it is, the sentence is too long
-        if enc_num_padding_tokens < 0 or dec_num_padding_tokens < 0:
-            raise ValueError("Sentence is too long")
+        # 1. For Encoder Input
+        num_enc_tokens = len(enc_input_tokens)
+        if num_enc_tokens > self.seq_len_src - 2: # -2 for [SOS] and [EOS]
+            enc_input_tokens = enc_input_tokens[:self.seq_len_src - 2]
         
+        enc_num_padding_tokens = self.seq_len_src - len(enc_input_tokens) - 2
         
-        # Add <s> and </s> token
         encoder_input = torch.cat(
             [
-                self.sos_token,
+                self.sos_token, # Using tgt_sos, assuming same ID or standard practice
                 torch.tensor(enc_input_tokens, dtype=torch.int64),
-                self.eos_token,
-                torch.tensor([self.pad_token] * enc_num_padding_tokens, dtype=torch.int64),
+                self.eos_token, # Using tgt_eos
+                torch.tensor([self.pad_token_src] * enc_num_padding_tokens, dtype=torch.int64), # Use SRC pad
             ],
             dim=0,
         )
 
-        # Add only <s> token
+        # 2. For Decoder Input
+        num_dec_tokens = len(dec_input_tokens)
+        if num_dec_tokens > self.seq_len_tgt - 1: # -1 for [SOS]
+            dec_input_tokens = dec_input_tokens[:self.seq_len_tgt - 1]
+
+        dec_num_padding_tokens = self.seq_len_tgt - len(dec_input_tokens) - 1
+        
         decoder_input = torch.cat(
             [
                 self.sos_token,
                 torch.tensor(dec_input_tokens, dtype=torch.int64),
-                torch.tensor([self.pad_token] * dec_num_padding_tokens, dtype=torch.int64),
+                torch.tensor([self.pad_token_tgt] * dec_num_padding_tokens, dtype=torch.int64), # Use TGT pad
             ],
             dim=0,
         )
 
-        # Add only </s> token
+        # 3. For Label (shifted decoder input)
+        # Use the *original* decoder tokens before truncation (or after, if we ensure label matches)
+        # We need to ensure label matches the *original* sequence length for the loss
+        
+        label_tokens = dec_input_tokens 
+        if len(label_tokens) > self.seq_len_tgt - 1: 
+             label_tokens = label_tokens[:self.seq_len_tgt - 1] 
+             
+        label_num_padding_tokens = self.seq_len_tgt - len(label_tokens) - 1
+
         label = torch.cat(
             [
-                torch.tensor(dec_input_tokens, dtype=torch.int64),
+                torch.tensor(label_tokens, dtype=torch.int64),
                 self.eos_token,
-                torch.tensor([self.pad_token] * dec_num_padding_tokens, dtype=torch.int64),
+                torch.tensor([self.pad_token_tgt] * label_num_padding_tokens, dtype=torch.int64), 
             ],
             dim=0,
         )
 
-        assert encoder_input.size(0) == self.seq_len
-        assert decoder_input.size(0) == self.seq_len
-        assert label.size(0) == self.seq_len
+        assert encoder_input.size(0) == self.seq_len_src
+        assert decoder_input.size(0) == self.seq_len_tgt
+        assert label.size(0) == self.seq_len_tgt
+
+        # For PyTorch Transformer masks
+        src_padding_mask = (encoder_input == self.pad_token_src.item())
+        tgt_padding_mask = (decoder_input == self.pad_token_tgt.item())
+        tgt_causal_mask = causal_mask(self.seq_len_tgt)
+
+        # For the "scratch" model masks
+        scratch_encoder_mask = (encoder_input != self.pad_token_src.item()).unsqueeze(0).unsqueeze(0).int() # (1, 1, seq_len)
+        scratch_decoder_mask = (decoder_input != self.pad_token_tgt.item()).unsqueeze(0).int() & (causal_mask(decoder_input.size(0)).eq(0)) # (1, seq_len) & (1, seq_len, seq_len)
 
         return {
             "encoder_input": encoder_input, 
             "decoder_input": decoder_input,  
-            "encoder_mask": (encoder_input != self.pad_token).unsqueeze(0).unsqueeze(0).int(), # (1, 1, seq_len)
-            "decoder_mask": (decoder_input != self.pad_token).unsqueeze(0).int() & causal_mask(decoder_input.size(0)), # (1, seq_len) & (1, seq_len, seq_len),
             "label": label,  
             "src_text": src_text,
             "tgt_text": tgt_text,
+
+              # For the "scratch" model masks
+            "scratch_encoder_mask": scratch_encoder_mask,
+            "scratch_decoder_mask": scratch_decoder_mask,
+             
+              # For PyTorch Transformer masks
+            "src_padding_mask": src_padding_mask,
+            "tgt_padding_mask": tgt_padding_mask,
+            "tgt_causal_mask": tgt_causal_mask
         }
-    
-def causal_mask(size):
-    mask = torch.triu(torch.ones((1, size, size)), diagonal=1).type(torch.int)
-    return mask == 0

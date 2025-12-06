@@ -2,42 +2,14 @@ import torch
 import torch.nn as nn
 import math
 
-class LayerNormalization(nn.Module):
-
-    def __init__(self, features: int, eps:float=10**-6) -> None:
-        super().__init__()
-        self.eps = eps
-        self.alpha = nn.Parameter(torch.ones(features)) # alpha is a learnable parameter
-        self.bias = nn.Parameter(torch.zeros(features)) # bias is a learnable parameter
-
-    def forward(self, x):
-        # x: (batch, seq_len, hidden_size)
-         # Keep the dimension for broadcasting
-        mean = x.mean(dim = -1, keepdim = True) # (batch, seq_len, 1)
-        # Keep the dimension for broadcasting
-        std = x.std(dim = -1, keepdim = True) # (batch, seq_len, 1)
-        # eps is to prevent dividing by zero or when std is very small
-        return self.alpha * (x - mean) / (std + self.eps) + self.bias
-
-class FeedForwardBlock(nn.Module):
-
-    def __init__(self, d_model: int, d_ff: int, dropout: float) -> None:
-        super().__init__()
-        self.linear_1 = nn.Linear(d_model, d_ff) # w1 and b1
-        self.dropout = nn.Dropout(dropout)
-        self.linear_2 = nn.Linear(d_ff, d_model) # w2 and b2
-
-    def forward(self, x):
-        # (batch, seq_len, d_model) --> (batch, seq_len, d_ff) --> (batch, seq_len, d_model)
-        return self.linear_2(self.dropout(torch.relu(self.linear_1(x))))
 
 class InputEmbeddings(nn.Module):
 
-    def __init__(self, d_model: int, vocab_size: int) -> None:
+    def __init__(self, d_model: int, vocab_size: int, padding_idx: int) -> None:
         super().__init__()
         self.d_model = d_model
         self.vocab_size = vocab_size
-        self.embedding = nn.Embedding(vocab_size, d_model)
+        self.embedding = nn.Embedding(vocab_size, d_model, padding_idx=padding_idx)
 
     def forward(self, x):
         # (batch, seq_len) --> (batch, seq_len, d_model)
@@ -70,6 +42,38 @@ class PositionalEncoding(nn.Module):
         x = x + (self.pe[:, :x.shape[1], :]).requires_grad_(False) # (batch, seq_len, d_model)
         return self.dropout(x)
 
+
+class LayerNormalization(nn.Module):
+
+    def __init__(self, features: int, eps:float=10**-6) -> None:
+        super().__init__()
+        self.eps = eps
+        self.alpha = nn.Parameter(torch.ones(features)) # alpha is a learnable parameter
+        self.bias = nn.Parameter(torch.zeros(features)) # bias is a learnable parameter
+
+    def forward(self, x):
+        # x: (batch, seq_len, hidden_size)
+         # Keep the dimension for broadcasting
+        mean = x.mean(dim = -1, keepdim = True) # (batch, seq_len, 1)
+        # Keep the dimension for broadcasting
+        std = x.std(dim = -1, keepdim = True) # (batch, seq_len, 1)
+        # eps is to prevent dividing by zero or when std is very small
+        return self.alpha * (x - mean) / (std + self.eps) + self.bias
+
+
+class FeedForwardBlock(nn.Module):
+
+    def __init__(self, d_model: int, d_ff: int, dropout: float) -> None:
+        super().__init__()
+        self.linear_1 = nn.Linear(d_model, d_ff) # w1 and b1
+        self.dropout = nn.Dropout(dropout)
+        self.linear_2 = nn.Linear(d_ff, d_model) # w2 and b2
+
+    def forward(self, x):
+        # (batch, seq_len, d_model) --> (batch, seq_len, d_ff) --> (batch, seq_len, d_model)
+        return self.linear_2(self.dropout(torch.relu(self.linear_1(x))))
+
+
 class ResidualConnection(nn.Module):
     
         def __init__(self, features: int, dropout: float) -> None:
@@ -79,6 +83,8 @@ class ResidualConnection(nn.Module):
     
         def forward(self, x, sublayer):
             return x + self.dropout(sublayer(self.norm(x)))
+
+
 
 class MultiHeadAttentionBlock(nn.Module):
 
@@ -133,6 +139,9 @@ class MultiHeadAttentionBlock(nn.Module):
         # (batch, seq_len, d_model) --> (batch, seq_len, d_model)  
         return self.w_o(x)
 
+
+
+# Define the Encoder and Decoder stacks of the Transformer model from scratch
 class EncoderBlock(nn.Module):
 
     def __init__(self, features: int, self_attention_block: MultiHeadAttentionBlock, feed_forward_block: FeedForwardBlock, dropout: float) -> None:
@@ -158,6 +167,8 @@ class Encoder(nn.Module):
             x = layer(x, mask)
         return self.norm(x)
 
+
+
 class DecoderBlock(nn.Module):
 
     def __init__(self, features: int, self_attention_block: MultiHeadAttentionBlock, cross_attention_block: MultiHeadAttentionBlock, feed_forward_block: FeedForwardBlock, dropout: float) -> None:
@@ -168,8 +179,17 @@ class DecoderBlock(nn.Module):
         self.residual_connections = nn.ModuleList([ResidualConnection(features, dropout) for _ in range(3)])
 
     def forward(self, x, encoder_output, src_mask, tgt_mask):
-        x = self.residual_connections[0](x, lambda x: self.self_attention_block(x, x, x, tgt_mask))
+        
+        # We add .unsqueeze(1) to the tgt_mask for the self-attention block.
+        # This changes its shape from (Batch, Seq, Seq) to (Batch, 1, Seq, Seq).
+        # This allows it to be correctly broadcast against the
+        # attention scores, which have the shape (Batch, Heads, Seq, Seq).
+        x = self.residual_connections[0](x, lambda x: self.self_attention_block(x, x, x, tgt_mask.unsqueeze(1)))
+        
+        # The src_mask already has the correct shape (Batch, 1, 1, Seq)
+        # for the cross-attention block, so no change is needed here.
         x = self.residual_connections[1](x, lambda x: self.cross_attention_block(x, encoder_output, encoder_output, src_mask))
+        
         x = self.residual_connections[2](x, self.feed_forward_block)
         return x
     
@@ -181,9 +201,12 @@ class Decoder(nn.Module):
         self.norm = LayerNormalization(features)
 
     def forward(self, x, encoder_output, src_mask, tgt_mask):
+        # Pass the masks to each decoder layer
         for layer in self.layers:
             x = layer(x, encoder_output, src_mask, tgt_mask)
         return self.norm(x)
+
+
 
 class ProjectionLayer(nn.Module):
 
@@ -208,13 +231,12 @@ class Transformer(nn.Module):
         self.projection_layer = projection_layer
 
     def encode(self, src, src_mask):
-        # (batch, seq_len, d_model)
+        # (It receives the Tensors directly from train.py)
         src = self.src_embed(src)
         src = self.src_pos(src)
         return self.encoder(src, src_mask)
-    
-    def decode(self, encoder_output: torch.Tensor, src_mask: torch.Tensor, tgt: torch.Tensor, tgt_mask: torch.Tensor):
-        # (batch, seq_len, d_model)
+
+    def decode(self, encoder_output, src_mask, tgt, tgt_mask):
         tgt = self.tgt_embed(tgt)
         tgt = self.tgt_pos(tgt)
         return self.decoder(tgt, encoder_output, src_mask, tgt_mask)
@@ -223,16 +245,13 @@ class Transformer(nn.Module):
         # (batch, seq_len, vocab_size)
         return self.projection_layer(x)
     
-def build_transformer(src_vocab_size: int, tgt_vocab_size: int, src_seq_len: int, tgt_seq_len: int, d_model: int=512, N: int=6, h: int=8, dropout: float=0.1, d_ff: int=2048) -> Transformer:
-    # Create the embedding layers
-    src_embed = InputEmbeddings(d_model, src_vocab_size)
-    tgt_embed = InputEmbeddings(d_model, tgt_vocab_size)
 
-    # Create the positional encoding layers
+def build_transformer(src_vocab_size: int, tgt_vocab_size: int, src_seq_len: int, tgt_seq_len: int, d_model: int, N: int, h: int, dropout: float, d_ff: int, src_padding_idx: int, tgt_padding_idx: int) -> Transformer:
+    src_embed = InputEmbeddings(d_model, src_vocab_size, padding_idx=src_padding_idx)
+    tgt_embed = InputEmbeddings(d_model, tgt_vocab_size, padding_idx=tgt_padding_idx)
     src_pos = PositionalEncoding(d_model, src_seq_len, dropout)
     tgt_pos = PositionalEncoding(d_model, tgt_seq_len, dropout)
     
-    # Create the encoder blocks
     encoder_blocks = []
     for _ in range(N):
         encoder_self_attention_block = MultiHeadAttentionBlock(d_model, h, dropout)
@@ -240,7 +259,6 @@ def build_transformer(src_vocab_size: int, tgt_vocab_size: int, src_seq_len: int
         encoder_block = EncoderBlock(d_model, encoder_self_attention_block, feed_forward_block, dropout)
         encoder_blocks.append(encoder_block)
 
-    # Create the decoder blocks
     decoder_blocks = []
     for _ in range(N):
         decoder_self_attention_block = MultiHeadAttentionBlock(d_model, h, dropout)
@@ -249,19 +267,102 @@ def build_transformer(src_vocab_size: int, tgt_vocab_size: int, src_seq_len: int
         decoder_block = DecoderBlock(d_model, decoder_self_attention_block, decoder_cross_attention_block, feed_forward_block, dropout)
         decoder_blocks.append(decoder_block)
     
-    # Create the encoder and decoder
     encoder = Encoder(d_model, nn.ModuleList(encoder_blocks))
     decoder = Decoder(d_model, nn.ModuleList(decoder_blocks))
-    
-    # Create the projection layer
     projection_layer = ProjectionLayer(d_model, tgt_vocab_size)
     
-    # Create the transformer
     transformer = Transformer(encoder, decoder, src_embed, tgt_embed, src_pos, tgt_pos, projection_layer)
+        
+    return transformer
+
+
+
+# Define the Transformer model using PyTorch's native nn.Transformer module
+class PyTorchNativeTransformer(nn.Module):
+    def __init__(self, src_vocab_size: int, tgt_vocab_size: int, 
+                 src_seq_len: int, tgt_seq_len: int,
+                 d_model: int, N: int, h: int, dropout: float, d_ff: int,
+                 src_padding_idx: int, tgt_padding_idx: int):
+        super().__init__()
+        
+        self.src_embed = InputEmbeddings(d_model, src_vocab_size, src_padding_idx)
+        self.tgt_embed = InputEmbeddings(d_model, tgt_vocab_size, tgt_padding_idx)
+        self.src_pos = PositionalEncoding(d_model, src_seq_len, dropout)
+        self.tgt_pos = PositionalEncoding(d_model, tgt_seq_len, dropout)
+        self.projection_layer = ProjectionLayer(d_model, tgt_vocab_size)
+        
+        self.transformer = nn.Transformer(
+            d_model=d_model,
+            nhead=h,
+            num_encoder_layers=N,
+            num_decoder_layers=N,
+            dim_feedforward=d_ff,
+            dropout=dropout,
+            batch_first=True 
+        )
+
+    def encode(self, src, src_padding_mask):
+
+        src_embed = self.src_embed(src)
+        src_with_pos = self.src_pos(src_embed)
+        
+        return self.transformer.encoder(
+            src_with_pos, 
+            src_key_padding_mask=src_padding_mask
+        )
+
+    def decode(self, encoder_output, src_padding_mask, tgt, tgt_padding_mask, tgt_causal_mask):
+        
+        tgt_embed = self.tgt_embed(tgt)
+        tgt_with_pos = self.tgt_pos(tgt_embed)
+
+        return self.transformer.decoder(
+            tgt_with_pos, 
+            encoder_output, 
+            tgt_mask=tgt_causal_mask, 
+            tgt_key_padding_mask=tgt_padding_mask,
+            memory_key_padding_mask=src_padding_mask
+        )
+
+    def project(self, x):
+        return self.projection_layer(x)
+
+def build_pytorch_transformer(config, src_vocab_len, tgt_vocab_len, src_padding_idx, tgt_padding_idx):
+    return PyTorchNativeTransformer(
+        src_vocab_len, tgt_vocab_len,
+        config['seq_len_src'], config['seq_len_tgt'],
+        config['d_model'], config['N'], config['h'],
+        config['dropout'], config['d_ff'],
+        src_padding_idx, tgt_padding_idx
+    )
+
+
+
+
+
+
+def get_model(config, vocab_src_len, vocab_tgt_len, src_pad_id, tgt_pad_id):
     
-    # Initialize the parameters
-    for p in transformer.parameters():
+    if config['model_type'] == 'scratch':
+        model = build_transformer(
+            vocab_src_len, vocab_tgt_len, 
+            config['seq_len_src'], config['seq_len_tgt'], 
+            d_model=config['d_model'],
+            N=config['N'], h=config['h'], dropout=config['dropout'], d_ff=config['d_ff'],
+            src_padding_idx=src_pad_id, 
+            tgt_padding_idx=tgt_pad_id
+        )
+    elif config['model_type'] == 'pytorch':
+        model = build_pytorch_transformer(
+            config, vocab_src_len, vocab_tgt_len, 
+            src_pad_id, tgt_pad_id
+        )
+    else:
+        raise ValueError("Invalid model_type in config")
+            
+    for p in model.parameters():
         if p.dim() > 1:
             nn.init.xavier_uniform_(p)
-    
-    return transformer
+            
+    return model
+
